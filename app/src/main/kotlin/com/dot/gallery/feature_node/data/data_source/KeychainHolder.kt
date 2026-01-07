@@ -326,6 +326,50 @@ class KeychainHolder @Inject constructor(
             byteBuffer.toByteArray()
         }
 
+    @Throws(IOException::class, GeneralSecurityException::class)
+    fun encryptPortableContentStream(vault: Vault, inputUri: Uri, outputFile: File) {
+        val dk = loadDataKey(vault) ?: error("Data key missing for portable vault")
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        val nonce = ByteArray(12).apply { SecureRandom().nextBytes(this) }
+        cipher.init(Cipher.ENCRYPT_MODE, dk.toAesKey(), GCMParameterSpec(128, nonce))
+
+        context.contentResolver.openInputStream(inputUri)?.use { inputStream ->
+            outputFile.outputStream().use { outputStream ->
+                outputStream.write(MAGIC)
+                outputStream.write(0)
+                outputStream.write(nonce)
+
+                val cipherOutputStream = javax.crypto.CipherOutputStream(outputStream, cipher)
+                val buffer = ByteArray(65536)
+                var bytesRead: Int
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    cipherOutputStream.write(buffer, 0, bytesRead)
+                }
+                cipherOutputStream.close()
+            }
+        }
+    }
+
+    @Throws(IOException::class, GeneralSecurityException::class)
+    fun encryptKotlinStream(vault: Vault, inputUri: Uri, outputFile: File) {
+        context.contentResolver.openInputStream(inputUri)?.use { inputStream ->
+            val encryptedFile = EncryptedFile.Builder(
+                context,
+                outputFile,
+                masterKey,
+                AES256_GCM_HKDF_4KB
+            ).build()
+
+            encryptedFile.openFileOutput().use { outputStream ->
+                val buffer = ByteArray(65536)
+                var bytesRead: Int
+                while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                    outputStream.write(buffer, 0, bytesRead)
+                }
+            }
+        }
+    }
+
     companion object {
         const val VAULT_INFO_FILE_NAME = "info.vault"
         const val DATA_KEY_FILE_NAME = "vault.key.enc"
