@@ -1,0 +1,124 @@
+name: Release v8a v7a
+
+on:
+  workflow_dispatch:
+    inputs:
+      create_release:
+        description: 'Create GitHub Release'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'true'
+          - 'false'
+
+jobs:
+  build_v8a:
+    runs-on: ubuntu-latest
+    outputs:
+      versionCode: ${{ steps.versioncode.outputs.versionCode }}
+      versionName: ${{ steps.versionname.outputs.versionName }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get versionCode
+        id: versioncode
+        run: echo "versionCode=$(grep 'versionCode' app/build.gradle.kts | awk '{ print $3 }' | head -n 1)" >> $GITHUB_OUTPUT
+      - name: Get versionName
+        id: versionname
+        run: echo "versionName=$(grep 'versionName' app/build.gradle.kts | head -1 | awk -F\" '{ print $2 }')" >> $GITHUB_OUTPUT
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          cache: 'gradle'
+          java-version: 17
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v3
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+      - name: Decode Keystore
+        id: decode_keystore
+        uses: timheuer/base64-to-file@v1
+        with:
+          fileName: 'release_key.jks'
+          fileDir: 'app/'
+          encodedString: ${{ secrets.SIGNING_KEY }}
+      - name: Build arm64-v8a Release APK
+        run: ./gradlew assembleArm64-v8aRelease
+        env: 
+          SIGNING_KEY_ALIAS: ${{ secrets.ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gallery Release (arm64-v8a)
+          path: app/build/outputs/apk/arm64-v8a/release/*.apk
+
+  build_v7a:
+    runs-on: ubuntu-latest
+    outputs:
+      versionCode: ${{ steps.versioncode.outputs.versionCode }}
+      versionName: ${{ steps.versionname.outputs.versionName }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get versionCode
+        id: versioncode
+        run: echo "versionCode=$(grep 'versionCode' app/build.gradle.kts | awk '{ print $3 }' | head -n 1)" >> $GITHUB_OUTPUT
+      - name: Get versionName
+        id: versionname
+        run: echo "versionName=$(grep 'versionName' app/build.gradle.kts | head -1 | awk -F\" '{ print $2 }')" >> $GITHUB_OUTPUT
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          cache: 'gradle'
+          java-version: 17
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+      - name: Setup Gradle
+        uses: gradle/gradle-build-action@v3
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+      - name: Decode Keystore
+        id: decode_keystore
+        uses: timheuer/base64-to-file@v1
+        with:
+          fileName: 'release_key.jks'
+          fileDir: 'app/'
+          encodedString: ${{ secrets.SIGNING_KEY }}
+      - name: Build armeabi-v7a Release APK
+        run: ./gradlew assembleArmeabi-v7aRelease
+        env: 
+          SIGNING_KEY_ALIAS: ${{ secrets.ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Gallery Release (armeabi-v7a)
+          path: app/build/outputs/apk/armeabi-v7a/release/*.apk
+
+  release:
+    needs: [build_v8a, build_v7a]
+    if: github.event.inputs.create_release == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Gallery Release (arm64-v8a)
+      - uses: actions/download-artifact@v4
+        with:
+          name: Gallery Release (armeabi-v7a)
+      - name: Generate SHA256
+        run: echo "### Checksums" >> ${{ needs.build_v8a.outputs.versionName }}-${{ needs.build_v8a.outputs.versionCode }}-changelog.txt && find . -name "Gallery-*.apk" -type f -print0 | sort -z | xargs -r0 sha256sum | awk '{gsub(".*/", "", $2); print "**"$2"**:", "`"$1"`"} ' >> ${{ needs.build_v8a.outputs.versionName }}-${{ needs.build_v8a.outputs.versionCode }}-changelog.txt
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ needs.build_v8a.outputs.versionName }}-${{ needs.build_v8a.outputs.versionCode }} Release (v8a & v7a)
+          body_path: ${{ needs.build_v8a.outputs.versionName }}-${{ needs.build_v8a.outputs.versionCode }}-changelog.txt
+          prerelease: false
+          tag_name: ${{ needs.build_v8a.outputs.versionName }}-v8a-v7a
+          files: |
+            ./**/Gallery-*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
