@@ -437,41 +437,31 @@ class MediaRepositoryImpl(
             with(keychainHolder) {
                 keychainHolder.checkVaultFolder(vault)
                 val output = vault.mediaFile(media.id).apply { if (exists()) delete() }
-                val rawBytes = getBytes(media.getUri())
-                val encryptedMedia = rawBytes?.let { bytes -> media.toEncryptedMedia(bytes) }
+                
                 suspend fun doEncrypt(): Boolean {
-                    val em = encryptedMedia ?: return false
-                    if (isTransferable(vault)) {
-                        val portableBytes = encryptPortableContent(vault, em.bytes)
-                        output.writeBytes(portableBytes)
-                    } else {
-                        output.encryptKotlin(em)
+                    return try {
+                        if (isTransferable(vault)) {
+                            encryptPortableContentStream(vault, media.getUri(), output)
+                        } else {
+                            encryptKotlinStream(vault, media.getUri(), output)
+                        }
+                        output.setLastModified(System.currentTimeMillis())
+                        
+                        val encryptedMedia = media.toEncryptedMedia2(vault.uuid)
+                        database.getVaultDao().addMediaToVault(encryptedMedia)
+                        true
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        false
                     }
-                    output.setLastModified(System.currentTimeMillis())
-                    database.getVaultDao().addMediaToVault(em.migrate(vault.uuid))
-                    return true
                 }
+                
                 return@withContext try {
                     doEncrypt()
                 } catch (e: Exception) {
-                    // If MasterKey mismatch (restored device), AEADBadTagException or GeneralSecurityException will surface.
-                    val isAead = e::class.simpleName?.contains("AEADBadTag", true) == true ||
-                            e.message?.contains("MAC verification failed", true) == true
-                    if (!isTransferable(vault) && isAead) {
-                        // Force convert vault to portable mode and retry once.
-                        writeVaultInfo(vault, transferable = true, force = true)
-                        try {
-                            doEncrypt()
-                        } catch (e2: Exception) {
-                            e2.printStackTrace()
-                            printError("Failed to add file after portable fallback: ${media.label}")
-                            false
-                        }
-                    } else {
-                        e.printStackTrace()
-                        printError("Failed to add file: ${media.label}")
-                        false
-                    }
+                    e.printStackTrace()
+                    printError("Failed to add file: ${media.label}")
+                    false
                 }
             }
         }
